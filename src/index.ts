@@ -63,6 +63,10 @@ async function main() {
     console.log('');
     console.log('[Simulator] Running... Press Ctrl+C to stop');
     console.log('');
+
+    // Keep the process alive - this Promise never resolves
+    // The process will only exit via SIGINT/SIGTERM handlers
+    await new Promise(() => {});
   } catch (error) {
     console.error('[Simulator] Failed to start:', error);
     process.exit(1);
