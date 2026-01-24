@@ -1,12 +1,19 @@
 import WebSocket from 'ws';
 import {
   type Waypoint,
-  calculateBearing,
-  calculateDistance,
-  interpolatePosition,
+  calculateBearing as legacyCalculateBearing,
+  calculateDistance as legacyCalculateDistance,
+  interpolatePosition as legacyInterpolatePosition,
   sfDeliveryRoute,
   generateSquareRoute
 } from './routes.js';
+import {
+  decodePolyline,
+  calculateBearing,
+  haversineDistance,
+  interpolatePosition
+} from './polyline.js';
+import type { Coordinates, RouteData } from './types.js';
 
 export type { Waypoint };
 
@@ -15,12 +22,16 @@ export interface SimulatorConfig {
   driverId: string;
   tenantId: string;
   pingIntervalMs: number;
-  mode: 'stationary' | 'linear' | 'delivery_route';
+  mode: 'stationary' | 'linear' | 'delivery_route' | 'polyline';
   startLat: number;
   startLng: number;
   speedMps: number;
-  // Optional: custom route waypoints (overrides mode-based route selection)
+  // Optional: custom route waypoints (overrides mode-based route selection for legacy modes)
   customRoute?: Waypoint[];
+  // Optional: Google-encoded polyline string for 'polyline' mode
+  routePolyline?: string;
+  // Optional: initial heading in degrees (0-360) when starting the route
+  initialHeading?: number;
 }
 
 interface LocationState {
@@ -45,12 +56,16 @@ export class DriverSimulator {
   private segmentProgress = 0; // 0-1 progress between waypoints
   private isPaused = false;
 
+  // Polyline mode state
+  private polylinePoints: Coordinates[] = [];
+  private currentPointIndex = 0;
+
   constructor(config: SimulatorConfig) {
     this.config = config;
     this.currentLocation = {
       lat: config.startLat,
       lng: config.startLng,
-      heading: 0,
+      heading: config.initialHeading ?? 0,
       speed: 0
     };
 
@@ -58,8 +73,70 @@ export class DriverSimulator {
     this.initializeRoute();
   }
 
+  /**
+   * Factory method to create a simulator from API route data.
+   * Automatically extracts the polyline and initial heading from the route.
+   *
+   * @param route - RouteData object from the API
+   * @param wsUrl - WebSocket server URL
+   * @param tenantId - Tenant ID for authentication
+   * @param config - Optional partial config to override defaults
+   * @returns Configured DriverSimulator instance
+   */
+  static fromRouteData(
+    route: RouteData,
+    wsUrl: string,
+    tenantId: string,
+    config?: Partial<SimulatorConfig>
+  ): DriverSimulator {
+    // Decode polyline to get starting position
+    const decodedPoints = decodePolyline(route.polyline);
+    const startPoint = decodedPoints[0] ?? { lat: 0, lng: 0 };
+
+    return new DriverSimulator({
+      wsUrl,
+      driverId: route.driverId ?? `driver-${route.id}`,
+      tenantId,
+      pingIntervalMs: config?.pingIntervalMs ?? 5000,
+      mode: 'polyline',
+      startLat: startPoint.lat,
+      startLng: startPoint.lng,
+      speedMps: config?.speedMps ?? 13.4, // ~30 mph default
+      routePolyline: route.polyline,
+      initialHeading: route.initialHeading,
+      ...config
+    });
+  }
+
   private initializeRoute(): void {
-    // If a custom route is provided, use it
+    // Handle polyline mode separately
+    if (this.config.mode === 'polyline') {
+      if (!this.config.routePolyline) {
+        console.warn('[Simulator] Polyline mode requires routePolyline config. Falling back to stationary.');
+        this.polylinePoints = [{ lat: this.config.startLat, lng: this.config.startLng }];
+        return;
+      }
+
+      // Decode the polyline into coordinate points
+      this.polylinePoints = decodePolyline(this.config.routePolyline);
+
+      if (this.polylinePoints.length === 0) {
+        console.warn('[Simulator] Decoded polyline is empty. Falling back to stationary.');
+        this.polylinePoints = [{ lat: this.config.startLat, lng: this.config.startLng }];
+        return;
+      }
+
+      // Update starting position to match polyline start
+      this.currentLocation.lat = this.polylinePoints[0].lat;
+      this.currentLocation.lng = this.polylinePoints[0].lng;
+      this.currentPointIndex = 0;
+      this.segmentProgress = 0;
+
+      console.log(`[Simulator] Initialized polyline mode with ${this.polylinePoints.length} points`);
+      return;
+    }
+
+    // Legacy mode: If a custom route is provided, use it
     if (this.config.customRoute && this.config.customRoute.length > 0) {
       this.route = this.config.customRoute;
       // Update starting position to match route
@@ -226,6 +303,99 @@ export class DriverSimulator {
   }
 
   private updatePosition(deltaSeconds: number): void {
+    // Route to the appropriate update method based on mode
+    if (this.config.mode === 'polyline') {
+      this.updatePositionPolyline(deltaSeconds);
+    } else {
+      this.updatePositionLegacy(deltaSeconds);
+    }
+  }
+
+  /**
+   * Updates position along a decoded polyline (road-following mode).
+   * Navigates through polyline points without pause support (stops are handled separately).
+   */
+  private updatePositionPolyline(deltaSeconds: number): void {
+    if (this.polylinePoints.length < 2) {
+      this.currentLocation.speed = 0;
+      return;
+    }
+
+    const currentPoint = this.polylinePoints[this.currentPointIndex];
+    const nextIndex = this.currentPointIndex + 1;
+
+    // Check if we've reached the end of the polyline
+    if (nextIndex >= this.polylinePoints.length) {
+      // Loop back to the start
+      console.log('[Simulator] Polyline route completed, starting again');
+      this.currentPointIndex = 0;
+      this.segmentProgress = 0;
+      return;
+    }
+
+    const nextPoint = this.polylinePoints[nextIndex];
+
+    // Calculate segment distance using polyline.ts haversineDistance
+    const segmentDistance = haversineDistance(currentPoint, nextPoint);
+
+    const distanceTraveled = this.config.speedMps * deltaSeconds;
+    const progressIncrement = segmentDistance > 0 ? distanceTraveled / segmentDistance : 1;
+
+    this.segmentProgress += progressIncrement;
+
+    // Check if we've reached the next point
+    while (this.segmentProgress >= 1 && this.currentPointIndex + 1 < this.polylinePoints.length) {
+      // Move to next segment
+      this.currentPointIndex++;
+      this.segmentProgress -= 1;
+
+      // Recalculate for the new segment
+      if (this.currentPointIndex + 1 < this.polylinePoints.length) {
+        const newCurrent = this.polylinePoints[this.currentPointIndex];
+        const newNext = this.polylinePoints[this.currentPointIndex + 1];
+        const newSegmentDistance = haversineDistance(newCurrent, newNext);
+
+        if (newSegmentDistance > 0) {
+          // Convert remaining progress to new segment
+          const remainingDistance = this.segmentProgress * segmentDistance;
+          this.segmentProgress = remainingDistance / newSegmentDistance;
+        }
+      }
+    }
+
+    // Check if we've reached the end
+    if (this.currentPointIndex + 1 >= this.polylinePoints.length) {
+      console.log('[Simulator] Polyline route completed, starting again');
+      this.currentPointIndex = 0;
+      this.segmentProgress = 0;
+      return;
+    }
+
+    // Interpolate current position using polyline.ts functions
+    const fromPoint = this.polylinePoints[this.currentPointIndex];
+    const toPoint = this.polylinePoints[this.currentPointIndex + 1];
+
+    const pos = interpolatePosition(fromPoint, toPoint, Math.min(this.segmentProgress, 1));
+
+    // Calculate heading toward next point
+    const heading = calculateBearing(
+      { lat: this.currentLocation.lat, lng: this.currentLocation.lng },
+      toPoint
+    );
+
+    this.currentLocation = {
+      lat: pos.lat,
+      lng: pos.lng,
+      heading,
+      speed: this.config.speedMps
+    };
+  }
+
+  /**
+   * Updates position along legacy waypoint-based routes.
+   * Supports pause at waypoints for delivery stops.
+   */
+  private updatePositionLegacy(deltaSeconds: number): void {
     if (this.isPaused || this.route.length < 2) {
       this.currentLocation.speed = 0;
       return;
@@ -235,8 +405,8 @@ export class DriverSimulator {
     const nextIndex = (this.currentWaypointIndex + 1) % this.route.length;
     const nextWaypoint = this.route[nextIndex];
 
-    // Calculate segment distance and progress increment
-    const segmentDistance = calculateDistance(
+    // Calculate segment distance and progress increment using legacy functions
+    const segmentDistance = legacyCalculateDistance(
       currentWaypoint.lat, currentWaypoint.lng,
       nextWaypoint.lat, nextWaypoint.lng
     );
@@ -268,15 +438,15 @@ export class DriverSimulator {
       }
     }
 
-    // Interpolate current position
-    const pos = interpolatePosition(
+    // Interpolate current position using legacy functions
+    const pos = legacyInterpolatePosition(
       currentWaypoint.lat, currentWaypoint.lng,
       nextWaypoint.lat, nextWaypoint.lng,
       Math.min(this.segmentProgress, 1)
     );
 
-    // Calculate heading toward next waypoint
-    const heading = calculateBearing(
+    // Calculate heading toward next waypoint using legacy function
+    const heading = legacyCalculateBearing(
       this.currentLocation.lat, this.currentLocation.lng,
       nextWaypoint.lat, nextWaypoint.lng
     );
@@ -320,14 +490,27 @@ export class DriverSimulator {
   }
 
   getStatus(): object {
-    return {
+    const baseStatus = {
       connected: this.connected,
       authenticated: this.authenticated,
       mode: this.config.mode,
       location: this.currentLocation,
-      waypointIndex: this.currentWaypointIndex,
       segmentProgress: this.segmentProgress,
       isPaused: this.isPaused
+    };
+
+    if (this.config.mode === 'polyline') {
+      return {
+        ...baseStatus,
+        pointIndex: this.currentPointIndex,
+        totalPoints: this.polylinePoints.length
+      };
+    }
+
+    return {
+      ...baseStatus,
+      waypointIndex: this.currentWaypointIndex,
+      totalWaypoints: this.route.length
     };
   }
 }
