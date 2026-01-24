@@ -1,12 +1,14 @@
 import WebSocket from 'ws';
 import {
-  Waypoint,
+  type Waypoint,
   calculateBearing,
   calculateDistance,
   interpolatePosition,
   sfDeliveryRoute,
   generateSquareRoute
 } from './routes.js';
+
+export type { Waypoint };
 
 export interface SimulatorConfig {
   wsUrl: string;
@@ -17,6 +19,8 @@ export interface SimulatorConfig {
   startLat: number;
   startLng: number;
   speedMps: number;
+  // Optional: custom route waypoints (overrides mode-based route selection)
+  customRoute?: Waypoint[];
 }
 
 interface LocationState {
@@ -55,6 +59,15 @@ export class DriverSimulator {
   }
 
   private initializeRoute(): void {
+    // If a custom route is provided, use it
+    if (this.config.customRoute && this.config.customRoute.length > 0) {
+      this.route = this.config.customRoute;
+      // Update starting position to match route
+      this.currentLocation.lat = this.route[0].lat;
+      this.currentLocation.lng = this.route[0].lng;
+      return;
+    }
+
     switch (this.config.mode) {
       case 'stationary':
         // No route needed - stay in place

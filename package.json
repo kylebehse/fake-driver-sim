@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:multi": "tsx watch src/multi-driver.ts",
     "start": "tsx src/index.ts",
+    "start:multi": "tsx src/multi-driver.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
