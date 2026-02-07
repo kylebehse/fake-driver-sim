@@ -11,6 +11,7 @@
 
 import type {
   RouteData,
+  RouteStop,
   DriverData,
   ApiResponse,
   PaginatedResponse,
@@ -506,6 +507,104 @@ export class ApiClient {
     );
 
     return drivers;
+  }
+
+  /**
+   * Fetches a route with its stops by route ID.
+   * The route detail endpoint already returns stops inline.
+   * Used to get stop coordinates for proximity detection.
+   */
+  async getRouteWithStops(routeId: string): Promise<RouteData | null> {
+    const url = this.buildUrl(`/routes/${routeId}`);
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = await this.request<any>(url);
+      // API wraps response in { data: {...} } - extract the route data
+      const raw = response?.data ?? response;
+      if (!raw || !raw.id) return null;
+
+      // Map the inline stops to RouteStop format if they exist
+      const stops: RouteStop[] = [];
+      if (raw.stops && Array.isArray(raw.stops)) {
+        for (const s of raw.stops) {
+          stops.push({
+            id: s.id,
+            sequenceNumber: s.sequenceNumber ?? s.sequence_number,
+            type: (s.sequenceNumber === 1 || s.sequence_number === 1) ? 'depot_start' : 'delivery',
+            address: s.address || '',
+            latitude: s.latitude ?? 0,
+            longitude: s.longitude ?? 0,
+            approachHeading: null,
+            serviceTimeSeconds: 120,
+            packageCount: s.packageCount ?? s.package_count ?? 1,
+            status: s.status || 'pending',
+            customer: s.customerName ? { name: s.customerName, phone: s.customerPhone || '' } : undefined,
+          });
+        }
+      }
+
+      const routeData: RouteData = {
+        ...raw,
+        routePolyline: raw.routePolyline ?? raw.route_polyline ?? '',
+        routeId: raw.routeId ?? raw.route_id ?? raw.id,
+        initialHeading: raw.initialHeading ?? 0,
+        totalDistanceMeters: raw.totalDistanceMeters ?? raw.total_distance_meters ?? 0,
+        totalDurationSeconds: raw.totalDurationSeconds ?? raw.total_duration_seconds ?? 0,
+        optimizationScore: raw.optimizationScore ?? raw.optimization_score ?? 0,
+        legs: raw.legs ?? [],
+        stops,
+      };
+
+      console.log(`[ApiClient] getRouteWithStops(${routeId}): ${stops.length} stops`);
+      return routeData;
+    } catch (error) {
+      if (error instanceof ApiError && error.statusCode === 404) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * PATCH a stop to update its status (e.g., to 'arrived').
+   */
+  async patchStop(routeId: string, stopId: string, data: Record<string, unknown>): Promise<boolean> {
+    const url = this.buildUrl(`/routes/${routeId}/stops/${stopId}`);
+
+    try {
+      await this.request<ApiResponse<unknown>>(url, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      });
+      console.log(`[ApiClient] PATCH stop ${stopId} success`);
+      return true;
+    } catch (error) {
+      console.error(`[ApiClient] PATCH stop ${stopId} failed:`, error);
+      return false;
+    }
+  }
+
+  /**
+   * Submit a proof of delivery for a stop.
+   */
+  async submitPod(stopId: string, data: {
+    recipient_name: string;
+    gps_latitude: number;
+    gps_longitude: number;
+    notes?: string;
+  }): Promise<boolean> {
+    const url = this.buildUrl(`/stops/${stopId}/pod`);
+
+    try {
+      await this.request<ApiResponse<unknown>>(url, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      console.log(`[ApiClient] POST POD for stop ${stopId} success`);
+      return true;
+    } catch (error) {
+      console.error(`[ApiClient] POST POD for stop ${stopId} failed:`, error);
+      return false;
+    }
   }
 
   /**

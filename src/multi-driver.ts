@@ -47,7 +47,7 @@ function loadConfig(): MultiDriverConfig {
     tenantId: process.env.TENANT_ID || 'tenant_test_002',
     wsUrl: process.env.WS_URL || 'ws://localhost:3001',
     pingIntervalMs: parseInt(process.env.PING_INTERVAL_MS || '3000', 10),
-    speedMps: parseFloat(process.env.SPEED_MPS || '8'),
+    speedMps: parseFloat(process.env.SPEED_MPS || '26.8'), // ~60 mph default
   };
 }
 
@@ -127,6 +127,23 @@ async function main(): Promise<void> {
   const simulators: DriverSimulator[] = [];
   let connectedCount = 0;
 
+  // Fetch stops for each route (needed for proximity detection)
+  console.log('[Multi-Sim] Fetching stops for each route...');
+  for (const route of routes) {
+    if (route.driverId && route.routePolyline) {
+      try {
+        const fullRoute = await apiClient.getRouteWithStops(route.id);
+        if (fullRoute?.stops) {
+          route.stops = fullRoute.stops;
+          console.log(`  Route ${route.id}: ${route.stops.length} stops loaded`);
+        }
+      } catch (error) {
+        console.warn(`  Route ${route.id}: Could not fetch stops`, error);
+      }
+    }
+  }
+  console.log('');
+
   for (const route of routes) {
     // Skip routes without drivers assigned
     if (!route.driverId) {
@@ -149,6 +166,7 @@ async function main(): Promise<void> {
         {
           pingIntervalMs: config.pingIntervalMs,
           speedMps: config.speedMps,
+          apiClient,
         }
       );
 

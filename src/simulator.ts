@@ -13,7 +13,8 @@ import {
   haversineDistance,
   interpolatePosition
 } from './polyline.js';
-import type { Coordinates, RouteData } from './types.js';
+import type { Coordinates, RouteData, RouteStop } from './types.js';
+import type { ApiClient } from './api-client.js';
 
 export type { Waypoint };
 
@@ -32,6 +33,14 @@ export interface SimulatorConfig {
   routePolyline?: string;
   // Optional: initial heading in degrees (0-360) when starting the route
   initialHeading?: number;
+  // Optional: route ID for API calls (stop completion)
+  routeId?: string;
+  // Optional: stops for proximity detection
+  stops?: RouteStop[];
+  // Optional: API client for stop completion
+  apiClient?: ApiClient;
+  // Optional: proximity threshold in meters (default 100)
+  proximityThresholdMeters?: number;
 }
 
 interface LocationState {
@@ -60,6 +69,12 @@ export class DriverSimulator {
   private polylinePoints: Coordinates[] = [];
   private currentPointIndex = 0;
 
+  // Stop completion state (Phase 2)
+  private stops: RouteStop[] = [];
+  private nextStopIndex = 0;
+  private completedStopIds: Set<string> = new Set();
+  private isCompletingStop = false;
+
   constructor(config: SimulatorConfig) {
     this.config = config;
     this.currentLocation = {
@@ -71,6 +86,21 @@ export class DriverSimulator {
 
     // Initialize route based on mode
     this.initializeRoute();
+
+    // Initialize stops for proximity detection
+    if (config.stops && config.stops.length > 0) {
+      this.stops = config.stops;
+      // Find first pending non-depot stop
+      this.nextStopIndex = this.stops.findIndex(
+        s => s.status !== 'completed' && s.type !== 'depot_start' && s.type !== 'depot_end'
+      );
+      if (this.nextStopIndex === -1) this.nextStopIndex = this.stops.length;
+
+      const pendingCount = this.stops.filter(
+        s => s.status !== 'completed' && s.type !== 'depot_start' && s.type !== 'depot_end'
+      ).length;
+      console.log(`[${config.driverId}] Loaded ${this.stops.length} stops (${pendingCount} pending deliveries)`);
+    }
   }
 
   /**
@@ -104,6 +134,8 @@ export class DriverSimulator {
       speedMps: config?.speedMps ?? 13.4, // ~30 mph default
       routePolyline: route.routePolyline,
       initialHeading: route.initialHeading,
+      routeId: route.id,
+      stops: route.stops,
       ...config
     });
   }
@@ -276,6 +308,7 @@ export class DriverSimulator {
 
     // Send initial location immediately
     this.sendLocationPing();
+    this.checkStopProximity();
 
     // Start periodic location pings
     this.pingInterval = setInterval(() => {
@@ -283,10 +316,12 @@ export class DriverSimulator {
     }, this.config.pingIntervalMs);
 
     // Start movement simulation (faster than pings for smooth movement)
+    // Also check proximity after every position update for reliable detection
     if (this.config.mode !== 'stationary') {
       const moveIntervalMs = 1000; // Update position every second
       this.moveInterval = setInterval(() => {
         this.updatePosition(moveIntervalMs / 1000);
+        this.checkStopProximity();
       }, moveIntervalMs);
     }
   }
@@ -479,6 +514,111 @@ export class DriverSimulator {
 
     this.send(ping);
     console.log(`[Simulator] Sent ping: ${lat.toFixed(6)}, ${lng.toFixed(6)} | heading: ${this.currentLocation.heading.toFixed(0)}° | speed: ${(this.currentLocation.speed * 2.237).toFixed(1)} mph`);
+  }
+
+  /**
+   * Check if the driver is close enough to the next pending stop to trigger completion.
+   * Called after each position update.
+   */
+  private async checkStopProximity(): Promise<void> {
+    if (this.isCompletingStop) return;
+    if (!this.config.apiClient || !this.config.routeId) return;
+    if (this.nextStopIndex >= this.stops.length) return;
+
+    const stop = this.stops[this.nextStopIndex];
+    if (!stop || !stop.latitude || !stop.longitude) return;
+    if (stop.type === 'depot_start' || stop.type === 'depot_end') {
+      this.nextStopIndex++;
+      return;
+    }
+    if (stop.status === 'completed' || this.completedStopIds.has(stop.id || '')) {
+      this.nextStopIndex++;
+      return;
+    }
+
+    const distance = haversineDistance(
+      { lat: this.currentLocation.lat, lng: this.currentLocation.lng },
+      { lat: stop.latitude, lng: stop.longitude }
+    );
+
+    const threshold = this.config.proximityThresholdMeters ?? 150;
+
+    if (distance < threshold) {
+      await this.completeStop(stop, distance);
+    }
+  }
+
+  /**
+   * Complete a stop: PATCH to arrived, wait, then submit POD.
+   */
+  private async completeStop(stop: RouteStop, distance: number): Promise<void> {
+    if (!this.config.apiClient || !this.config.routeId || !stop.id) return;
+
+    this.isCompletingStop = true;
+    const driverId = this.config.driverId;
+    const stopId = stop.id;
+
+    console.log(`[${driverId}] ===== STOP PROXIMITY TRIGGERED =====`);
+    console.log(`[${driverId}] Stop: ${stopId} (seq ${stop.sequenceNumber})`);
+    console.log(`[${driverId}] Address: ${stop.address}`);
+    console.log(`[${driverId}] Distance: ${distance.toFixed(0)}m`);
+
+    try {
+      // Step 1: PATCH stop to 'arrived'
+      console.log(`[${driverId}] Step 1: Marking stop as arrived...`);
+      const arrivedOk = await this.config.apiClient.patchStop(
+        this.config.routeId,
+        stopId,
+        { status: 'arrived', arrivedAt: new Date().toISOString() }
+      );
+      if (!arrivedOk) {
+        console.error(`[${driverId}] Failed to mark stop arrived, skipping`);
+        this.isCompletingStop = false;
+        return;
+      }
+
+      // Step 2: Wait simulated service time (2-4 seconds)
+      const serviceTime = 2000 + Math.random() * 2000;
+      console.log(`[${driverId}] Step 2: Simulating service time (${(serviceTime / 1000).toFixed(1)}s)...`);
+      await new Promise(resolve => setTimeout(resolve, serviceTime));
+
+      // Step 3: Submit POD
+      const recipientName = stop.customer?.name || `Recipient at ${stop.address.split(',')[0]}`;
+      console.log(`[${driverId}] Step 3: Submitting POD for "${recipientName}"...`);
+      const podOk = await this.config.apiClient.submitPod(stopId, {
+        recipient_name: recipientName,
+        gps_latitude: this.currentLocation.lat,
+        gps_longitude: this.currentLocation.lng,
+        notes: `Auto-delivered by simulator at ${new Date().toISOString()}`
+      });
+
+      if (podOk) {
+        this.completedStopIds.add(stopId);
+        stop.status = 'completed';
+        this.nextStopIndex++;
+
+        // Skip any depot stops
+        while (this.nextStopIndex < this.stops.length) {
+          const next = this.stops[this.nextStopIndex];
+          if (next.type === 'depot_start' || next.type === 'depot_end' || next.status === 'completed') {
+            this.nextStopIndex++;
+          } else {
+            break;
+          }
+        }
+
+        const remaining = this.stops.length - this.nextStopIndex;
+        const completed = this.completedStopIds.size;
+        console.log(`[${driverId}] DELIVERED! ${completed} completed, ${remaining} remaining`);
+        console.log(`[${driverId}] =====================================`);
+      } else {
+        console.error(`[${driverId}] POD submission failed for stop ${stopId}`);
+      }
+    } catch (error) {
+      console.error(`[${driverId}] Error completing stop ${stopId}:`, error);
+    }
+
+    this.isCompletingStop = false;
   }
 
   disconnect(): void {
