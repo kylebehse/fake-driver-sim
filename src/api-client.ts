@@ -284,13 +284,8 @@ export class ApiClient {
     const url = this.buildUrl('/routes', { status: 'in_progress' });
 
     try {
-      const response =
-        await this.request<PaginatedResponse<RouteData>>(url);
-
-      if (!response.success) {
-        console.error('[ApiClient] getActiveRoutes: API returned success=false');
-        return [];
-      }
+      // API returns { data: RouteData[], meta: { next_cursor, has_more } }
+      const response = await this.request<{ data: RouteData[]; meta: { next_cursor: string | null; has_more: boolean } }>(url);
 
       const routes = response.data ?? [];
       console.log(
@@ -323,15 +318,8 @@ export class ApiClient {
     const url = this.buildUrl('/routes', { status });
 
     try {
-      const response =
-        await this.request<PaginatedResponse<RouteData>>(url);
-
-      if (!response.success) {
-        console.error(
-          `[ApiClient] getRoutesByStatus(${status}): API returned success=false`
-        );
-        return [];
-      }
+      // API returns { data: RouteData[], meta: { next_cursor, has_more } }
+      const response = await this.request<{ data: RouteData[]; meta: { next_cursor: string | null; has_more: boolean } }>(url);
 
       const routes = response.data ?? [];
       console.log(
@@ -540,7 +528,7 @@ export class ApiClient {
     try {
       // Use the routes endpoint with limit=1 as a lightweight health check
       const url = this.buildUrl('/routes', { limit: 1 });
-      await this.request<PaginatedResponse<RouteData>>(url);
+      await this.request<{ data: RouteData[]; meta: { next_cursor: string | null; has_more: boolean } }>(url);
       console.log('[ApiClient] Health check passed');
       return true;
     } catch (error) {

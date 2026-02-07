@@ -135,7 +135,7 @@ async function main(): Promise<void> {
     }
 
     // Skip routes without polylines
-    if (!route.polyline) {
+    if (!route.routePolyline) {
       console.warn(`[Multi-Sim] Skipping route ${route.id} - no polyline data`);
       continue;
     }

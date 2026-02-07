@@ -235,8 +235,9 @@ export interface RouteData {
   /**
    * Full route polyline (Google-encoded).
    * This is the complete path from depot through all stops.
+   * Note: API field is 'routePolyline' - this maps to that.
    */
-  polyline: string;
+  routePolyline: string;
   /** Total route distance in meters */
   totalDistanceMeters: number;
   /** Total estimated route duration in seconds */

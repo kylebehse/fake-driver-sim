@@ -90,7 +90,7 @@ export class DriverSimulator {
     config?: Partial<SimulatorConfig>
   ): DriverSimulator {
     // Decode polyline to get starting position
-    const decodedPoints = decodePolyline(route.polyline);
+    const decodedPoints = decodePolyline(route.routePolyline);
     const startPoint = decodedPoints[0] ?? { lat: 0, lng: 0 };
 
     return new DriverSimulator({
@@ -102,7 +102,7 @@ export class DriverSimulator {
       startLat: startPoint.lat,
       startLng: startPoint.lng,
       speedMps: config?.speedMps ?? 13.4, // ~30 mph default
-      routePolyline: route.polyline,
+      routePolyline: route.routePolyline,
       initialHeading: route.initialHeading,
       ...config
     });
