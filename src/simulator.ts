@@ -71,7 +71,6 @@ export class DriverSimulator {
 
   // Stop completion state (Phase 2)
   private stops: RouteStop[] = [];
-  private nextStopIndex = 0;
   private completedStopIds: Set<string> = new Set();
   private isCompletingStop = false;
 
@@ -90,12 +89,6 @@ export class DriverSimulator {
     // Initialize stops for proximity detection
     if (config.stops && config.stops.length > 0) {
       this.stops = config.stops;
-      // Find first pending non-depot stop
-      this.nextStopIndex = this.stops.findIndex(
-        s => s.status !== 'completed' && s.type !== 'depot_start' && s.type !== 'depot_end'
-      );
-      if (this.nextStopIndex === -1) this.nextStopIndex = this.stops.length;
-
       const pendingCount = this.stops.filter(
         s => s.status !== 'completed' && s.type !== 'depot_start' && s.type !== 'depot_end'
       ).length;
@@ -517,34 +510,36 @@ export class DriverSimulator {
   }
 
   /**
-   * Check if the driver is close enough to the next pending stop to trigger completion.
-   * Called after each position update.
+   * Check if the driver is close enough to ANY pending stop to trigger completion.
+   * Scans all remaining stops (not just the next sequential one) so that stops
+   * aren't skipped if the polyline doesn't pass them in exact sequence order.
+   * Called after each position update (every 1s).
    */
   private async checkStopProximity(): Promise<void> {
     if (this.isCompletingStop) return;
     if (!this.config.apiClient || !this.config.routeId) return;
-    if (this.nextStopIndex >= this.stops.length) return;
-
-    const stop = this.stops[this.nextStopIndex];
-    if (!stop || !stop.latitude || !stop.longitude) return;
-    if (stop.type === 'depot_start' || stop.type === 'depot_end') {
-      this.nextStopIndex++;
-      return;
-    }
-    if (stop.status === 'completed' || this.completedStopIds.has(stop.id || '')) {
-      this.nextStopIndex++;
-      return;
-    }
-
-    const distance = haversineDistance(
-      { lat: this.currentLocation.lat, lng: this.currentLocation.lng },
-      { lat: stop.latitude, lng: stop.longitude }
-    );
 
     const threshold = this.config.proximityThresholdMeters ?? 150;
+    const driverPos = { lat: this.currentLocation.lat, lng: this.currentLocation.lng };
 
-    if (distance < threshold) {
-      await this.completeStop(stop, distance);
+    // Find the closest pending stop within threshold
+    let closestStop: RouteStop | null = null;
+    let closestDistance = Infinity;
+
+    for (const stop of this.stops) {
+      if (!stop.id || !stop.latitude || !stop.longitude) continue;
+      if (stop.type === 'depot_start' || stop.type === 'depot_end') continue;
+      if (stop.status === 'completed' || this.completedStopIds.has(stop.id)) continue;
+
+      const distance = haversineDistance(driverPos, { lat: stop.latitude, lng: stop.longitude });
+      if (distance < threshold && distance < closestDistance) {
+        closestStop = stop;
+        closestDistance = distance;
+      }
+    }
+
+    if (closestStop) {
+      await this.completeStop(closestStop, closestDistance);
     }
   }
 
@@ -595,21 +590,13 @@ export class DriverSimulator {
       if (podOk) {
         this.completedStopIds.add(stopId);
         stop.status = 'completed';
-        this.nextStopIndex++;
 
-        // Skip any depot stops
-        while (this.nextStopIndex < this.stops.length) {
-          const next = this.stops[this.nextStopIndex];
-          if (next.type === 'depot_start' || next.type === 'depot_end' || next.status === 'completed') {
-            this.nextStopIndex++;
-          } else {
-            break;
-          }
-        }
-
-        const remaining = this.stops.length - this.nextStopIndex;
+        const totalDelivery = this.stops.filter(s =>
+          s.type !== 'depot_start' && s.type !== 'depot_end'
+        ).length;
         const completed = this.completedStopIds.size;
-        console.log(`[${driverId}] DELIVERED! ${completed} completed, ${remaining} remaining`);
+        const remaining = totalDelivery - completed;
+        console.log(`[${driverId}] DELIVERED! ${completed}/${totalDelivery} completed, ${remaining} remaining`);
         console.log(`[${driverId}] =====================================`);
       } else {
         console.error(`[${driverId}] POD submission failed for stop ${stopId}`);
