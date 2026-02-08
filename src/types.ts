@@ -422,6 +422,7 @@ export interface RouteNavigationState extends PolylineNavigationState {
 /**
  * Location ping message sent to the WebSocket server.
  * Sent periodically while the driver is active.
+ * Field names use snake_case to match the wire format.
  */
 export interface LocationPingPayload {
   /** Current latitude */
@@ -435,7 +436,7 @@ export interface LocationPingPayload {
   /** Current speed in meters per second */
   speed: number;
   /** Device battery level (0-100) */
-  batteryLevel: number;
+  battery_level: number;
   /** Altitude in meters (optional) */
   altitude?: number;
   /** Client-side timestamp (ISO 8601) */
@@ -452,6 +453,7 @@ export interface LocationPingMessage {
 
 /**
  * Authentication message sent when connecting to WebSocket.
+ * Field names use snake_case to match the wire format.
  */
 export interface AuthMessage {
   type: 'auth';
@@ -459,13 +461,13 @@ export interface AuthMessage {
     /** JWT token for authentication */
     token: string;
     /** Driver ID */
-    driverId: string;
+    driver_id: string;
     /** Platform identifier */
     platform: string;
     /** Application version */
-    appVersion: string;
+    app_version: string;
     /** Device identifier */
-    deviceId: string;
+    device_id: string;
   };
 }
 

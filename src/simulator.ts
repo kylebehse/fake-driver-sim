@@ -261,10 +261,10 @@ export class DriverSimulator {
       type: 'auth',
       payload: {
         token: fakeToken,
-        driverId: this.config.driverId,
+        driver_id: this.config.driverId,
         platform: 'simulator',
-        appVersion: '1.0.0',
-        deviceId: 'fake-driver-sim'
+        app_version: '1.0.0',
+        device_id: 'fake-driver-sim'
       }
     });
   }
@@ -501,7 +501,7 @@ export class DriverSimulator {
         accuracy: 5 + Math.random() * 10, // 5-15 meters
         heading: this.currentLocation.heading,
         speed: this.currentLocation.speed,
-        batteryLevel: 75 + Math.floor(Math.random() * 20) // 75-95%
+        battery_level: 75 + Math.floor(Math.random() * 20) // 75-95%
       }
     };
 
@@ -564,7 +564,7 @@ export class DriverSimulator {
       const arrivedOk = await this.config.apiClient.patchStop(
         this.config.routeId,
         stopId,
-        { status: 'arrived', arrivedAt: new Date().toISOString() }
+        { status: 'arrived', arrived_at: new Date().toISOString() }
       );
       if (!arrivedOk) {
         console.error(`[${driverId}] Failed to mark stop arrived, skipping`);

@@ -415,7 +415,7 @@ export class ApiClient {
    * ```
    */
   async getRouteById(routeId: string): Promise<RouteData | null> {
-    const url = this.buildUrl(`/routes/${routeId}`, { includeStops: true });
+    const url = this.buildUrl(`/routes/${routeId}`, { include_stops: true });
 
     try {
       const response = await this.request<ApiResponse<RouteData>>(url);
@@ -525,33 +525,34 @@ export class ApiClient {
       if (!raw || !raw.id) return null;
 
       // Map the inline stops to RouteStop format if they exist
+      // API guarantees snake_case responses via global hook
       const stops: RouteStop[] = [];
       if (raw.stops && Array.isArray(raw.stops)) {
         for (const s of raw.stops) {
           stops.push({
             id: s.id,
-            sequenceNumber: s.sequenceNumber ?? s.sequence_number,
-            type: (s.sequenceNumber === 1 || s.sequence_number === 1) ? 'depot_start' : 'delivery',
+            sequenceNumber: s.sequence_number,
+            type: s.sequence_number === 1 ? 'depot_start' : 'delivery',
             address: s.address || '',
             latitude: s.latitude ?? 0,
             longitude: s.longitude ?? 0,
             approachHeading: null,
             serviceTimeSeconds: 120,
-            packageCount: s.packageCount ?? s.package_count ?? 1,
+            packageCount: s.package_count ?? 1,
             status: s.status || 'pending',
-            customer: s.customerName ? { name: s.customerName, phone: s.customerPhone || '' } : undefined,
+            customer: s.customer_name ? { name: s.customer_name, phone: s.customer_phone || '' } : undefined,
           });
         }
       }
 
       const routeData: RouteData = {
         ...raw,
-        routePolyline: raw.routePolyline ?? raw.route_polyline ?? '',
-        routeId: raw.routeId ?? raw.route_id ?? raw.id,
-        initialHeading: raw.initialHeading ?? 0,
-        totalDistanceMeters: raw.totalDistanceMeters ?? raw.total_distance_meters ?? 0,
-        totalDurationSeconds: raw.totalDurationSeconds ?? raw.total_duration_seconds ?? 0,
-        optimizationScore: raw.optimizationScore ?? raw.optimization_score ?? 0,
+        routePolyline: raw.route_polyline ?? '',
+        routeId: raw.route_id ?? raw.id,
+        initialHeading: raw.initial_heading ?? 0,
+        totalDistanceMeters: raw.total_distance_meters ?? 0,
+        totalDurationSeconds: raw.total_duration_seconds ?? 0,
+        optimizationScore: raw.optimization_score ?? 0,
         legs: raw.legs ?? [],
         stops,
       };
