@@ -115,6 +115,36 @@ export class ApiClient {
   }
 
   // --------------------------------------------------------------------------
+  // snake_case → camelCase Response Transform
+  // --------------------------------------------------------------------------
+
+  /**
+   * Converts a snake_case string to camelCase.
+   * The API returns snake_case fields; internal TypeScript uses camelCase.
+   */
+  private static snakeToCamelKey(key: string): string {
+    return key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  }
+
+  /**
+   * Recursively converts all object keys from snake_case to camelCase.
+   * Arrays are traversed, primitives are returned as-is.
+   */
+  private static snakeToCamel(obj: unknown): unknown {
+    if (Array.isArray(obj)) {
+      return obj.map((item) => ApiClient.snakeToCamel(item));
+    }
+    if (obj !== null && typeof obj === 'object') {
+      const result: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+        result[ApiClient.snakeToCamelKey(key)] = ApiClient.snakeToCamel(value);
+      }
+      return result;
+    }
+    return obj;
+  }
+
+  // --------------------------------------------------------------------------
   // Private Helper Methods
   // --------------------------------------------------------------------------
 
@@ -206,6 +236,11 @@ export class ApiClient {
         body = await response.json();
       } else {
         body = await response.text();
+      }
+
+      // Transform snake_case API response keys to camelCase for internal use
+      if (typeof body === 'object' && body !== null) {
+        body = ApiClient.snakeToCamel(body);
       }
 
       // Handle non-success status codes
