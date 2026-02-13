@@ -519,7 +519,7 @@ export class DriverSimulator {
     if (this.isCompletingStop) return;
     if (!this.config.apiClient || !this.config.routeId) return;
 
-    const threshold = this.config.proximityThresholdMeters ?? 150;
+    const threshold = this.config.proximityThresholdMeters ?? 100;
     const driverPos = { lat: this.currentLocation.lat, lng: this.currentLocation.lng };
 
     // Find the closest pending stop within threshold
