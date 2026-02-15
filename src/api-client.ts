@@ -33,6 +33,8 @@ export interface ApiClientConfig {
   apiKey?: string;
   /** Optional OAuth2 access token for authentication */
   accessToken?: string;
+  /** Optional dev bypass token to skip RBAC in dev mode */
+  devBypassToken?: string;
   /** Request timeout in milliseconds (default: 30000) */
   timeout?: number;
 }
@@ -195,6 +197,10 @@ export class ApiClient {
 
     if (this.config.accessToken) {
       headers['Authorization'] = `Bearer ${this.config.accessToken}`;
+    }
+
+    if (this.config.devBypassToken) {
+      headers['X-Dev-Bypass'] = this.config.devBypassToken;
     }
 
     return headers;
@@ -576,6 +582,7 @@ export class ApiClient {
             packageCount: s.package_count ?? 1,
             status: s.status || 'pending',
             customer: s.customer_name ? { name: s.customer_name, phone: s.customer_phone || '' } : undefined,
+            podType: s.pod_type || null,
           });
         }
       }
@@ -626,6 +633,8 @@ export class ApiClient {
     recipient_name: string;
     gps_latitude: number;
     gps_longitude: number;
+    photo_data?: string;
+    signature_data?: string;
     notes?: string;
   }): Promise<boolean> {
     const url = this.buildUrl(`/stops/${stopId}/pod`);

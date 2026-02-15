@@ -134,6 +134,8 @@ export interface RouteStop {
   distanceFromPrevious?: number;
   /** Estimated drive time from previous stop in seconds */
   durationFromPrevious?: number;
+  /** POD type required for this stop (photo, signature, or both) */
+  podType?: 'photo' | 'signature' | 'both' | null;
 }
 
 // ============================================================================
