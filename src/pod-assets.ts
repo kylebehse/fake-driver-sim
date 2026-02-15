@@ -2,7 +2,7 @@
  * POD Asset Loader for Fake Driver Simulator
  *
  * Loads doorstep photos and signature images from the SvelteKit static directory,
- * converts to base64 data URIs for POD submission.
+ * converts to raw base64 strings for POD submission via the API.
  *
  * Falls back gracefully if images are not found (sim continues without images).
  */
@@ -75,12 +75,12 @@ function loadAssets(): void {
   try {
     photos = PHOTO_FILES.map((file) => {
       const buffer = fs.readFileSync(path.join(photosDir, file));
-      return `data:image/jpeg;base64,${buffer.toString('base64')}`;
+      return buffer.toString('base64');
     });
 
     signatures = SIGNATURE_FILES.map((file) => {
       const buffer = fs.readFileSync(path.join(signaturesDir, file));
-      return `data:image/png;base64,${buffer.toString('base64')}`;
+      return buffer.toString('base64');
     });
 
     console.log(`[PodAssets] Loaded ${photos.length} photos and ${signatures.length} signatures from ${assetsDir}`);
