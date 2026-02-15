@@ -16,6 +16,25 @@ import { DriverSimulator, SimulatorConfig } from './simulator.js';
 // Load .env file
 config();
 
+// Safety: prevent running against production
+const envMode = process.env.ENV_MODE || 'local';
+if (envMode === 'live' || envMode === 'production') {
+  console.error('========================================');
+  console.error('  ERROR: Simulator cannot run against production!');
+  console.error(`  ENV_MODE is set to "${envMode}"`);
+  console.error('  Set ENV_MODE to local, dev, or test.');
+  console.error('========================================');
+  process.exit(1);
+}
+
+if (envMode === 'test') {
+  console.warn('========================================');
+  console.warn('  WARNING: Running against TEST environment');
+  console.warn('  Fake data will be written to test server');
+  console.warn('========================================');
+  console.warn('');
+}
+
 // Parse configuration from environment
 const simulatorConfig: SimulatorConfig = {
   wsUrl: process.env.WS_URL || 'ws://localhost:3001',

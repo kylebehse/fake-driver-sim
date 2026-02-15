@@ -21,6 +21,25 @@ import type { RouteData } from './types.js';
 // Load .env file
 config();
 
+// Safety: prevent running against production
+const envMode = process.env.ENV_MODE || 'local';
+if (envMode === 'live' || envMode === 'production') {
+  console.error('========================================');
+  console.error('  ERROR: Simulator cannot run against production!');
+  console.error(`  ENV_MODE is set to "${envMode}"`);
+  console.error('  Set ENV_MODE to local, dev, or test.');
+  console.error('========================================');
+  process.exit(1);
+}
+
+if (envMode === 'test') {
+  console.warn('========================================');
+  console.warn('  WARNING: Running against TEST environment');
+  console.warn('  Fake data will be written to test server');
+  console.warn('========================================');
+  console.warn('');
+}
+
 // ============================================================================
 // Configuration
 // ============================================================================
@@ -76,6 +95,7 @@ async function main(): Promise<void> {
     apiClient = createApiClient({
       baseUrl: config.apiUrl,
       tenantId: config.tenantId,
+      devBypassToken: process.env.DEV_BYPASS_TOKEN,
     });
   } catch (error) {
     console.error('[Multi-Sim] Failed to create API client:', error);
