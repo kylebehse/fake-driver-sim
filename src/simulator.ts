@@ -15,6 +15,7 @@ import {
 } from './polyline.js';
 import type { Coordinates, RouteData, RouteStop } from './types.js';
 import type { ApiClient } from './api-client.js';
+import { getPhoto, getSignature, getRecipientName } from './pod-assets.js';
 
 export type { Waypoint };
 
@@ -578,12 +579,16 @@ export class DriverSimulator {
       await new Promise(resolve => setTimeout(resolve, serviceTime));
 
       // Step 3: Submit POD
-      const recipientName = stop.customer?.name || `Recipient at ${stop.address.split(',')[0]}`;
-      console.log(`[${driverId}] Step 3: Submitting POD for "${recipientName}"...`);
+      const stopIndex = this.stops.indexOf(stop);
+      const recipientName = stop.customer?.name || getRecipientName(stopIndex);
+      const includeSignature = stop.podType !== 'photo'; // Include unless photo-only
+      console.log(`[${driverId}] Step 3: Submitting POD for "${recipientName}" (type: ${stop.podType || 'both'})...`);
       const podOk = await this.config.apiClient.submitPod(stopId, {
         recipient_name: recipientName,
         gps_latitude: this.currentLocation.lat,
         gps_longitude: this.currentLocation.lng,
+        photo_data: getPhoto(stopIndex),
+        signature_data: includeSignature ? getSignature(stopIndex) : undefined,
         notes: `Auto-delivered by simulator at ${new Date().toISOString()}`
       });
 
